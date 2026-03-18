@@ -1,16 +1,16 @@
 # uri_parser
 
-Test data for validating URI parsing and normalization against [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986).
+Test data for validating URI parsing and normalization against [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986), cross-checked by two canonical parsers (C/uriparser and Python/urllib.parse).
 
 ## Files
 
 ### `uri_test_data.sql`
 
-**345 test URIs** across 20+ categories designed to exercise every production in the RFC 3986 ABNF grammar:
+**378 test URIs** across 20+ categories designed to exercise every production in the RFC 3986 ABNF grammar:
 
 | Category | IDs | Examples |
 |---|---|---|
-| Basic structure | 1–23 | HTTP, HTTPS, FTP, SSH, mailto, tel, URN, file, data, WebSocket |
+| Basic structure | 1–26 | HTTP, HTTPS, FTP, SSH, mailto, tel, URN, file, data, WebSocket, Kafka, CockroachDB |
 | Authority / host | 100–126 | localhost, domains, FQDN, punycode, IPv4, IPv6, IPvFuture, zone ID |
 | Port | 200–208 | Default, non-standard, zero, max, empty |
 | Userinfo | 300–310 | Username, password, percent-encoded, multiple colons |
@@ -39,12 +39,14 @@ Test data for validating URI parsing and normalization against [RFC 3986](https:
 | Sub-delims in userinfo | 2600 | All 11 sub-delimiters |
 | segment-nz-nc | 2700–2702 | Relative refs with `@`, `!`, colon requiring `./` prefix |
 | IPv6 full forms | 2800–2805 | Fully expanded, all-zeros, zone ID, mixed groups, dual-stack |
+| Kafka | 2900–2914 | Broker, topic, SASL, kafka+ssl, multi-broker, consumer config |
+| CockroachDB | 2920–2934 | postgresql://, SSL modes, Cloud URLs, encoded options, IPv4/IPv6 |
 
 Descriptions note RFC 3986 validity — URIs that are invalid per the ABNF (e.g., brackets in query, `#` in fragment) are explicitly marked.
 
 ### `uri_equivalence_tests.sql`
 
-**377 test rows across 157 groups** for validating URI normalization. Each group contains URI variants that should (or should not) normalize to the same output.
+**415 test rows across 173 groups** for validating URI normalization. Each group contains URI variants that should (or should not) normalize to the same output.
 
 **Schema:**
 
@@ -67,7 +69,7 @@ CREATE TABLE uri_equivalence_tests (
 |---|---|---|
 | `syntax` | Case normalization, percent-encoding of unreserved chars, dot-segment removal, hex digit case | `HTTP://EXAMPLE.COM/%7euser/./file` → `http://example.com/~user/file` |
 | `scheme` | Default port removal, empty path → `/`, IPv6 compression, empty port removal | `http://example.com:80` → `http://example.com/` |
-| `protocol` | Query param ordering, plus-as-space, FQDN trailing dot, IDN/punycode, IPv4-mapped IPv6 | `http://example.com.` → `http://example.com` |
+| `protocol` | Query param ordering, plus-as-space, FQDN trailing dot, IDN/punycode, NFC normalization | `http://example.com.` → `http://example.com` |
 
 **Coverage:**
 
@@ -83,13 +85,28 @@ CREATE TABLE uri_equivalence_tests (
 | Combined normalizations | 100–105, 641–643 | Positive |
 | Reserved char encoding boundaries | 200–206 | Negative |
 | Query/fragment/userinfo encoding | 210–212, 220–221, 230–231 | Positive |
-| Protocol-level equivalences | 240–242, 410–412, 430–431, 440–441, 480–481, 491–492 | Positive |
+| Protocol-level equivalences | 240–242, 410–412, 430–431, 480–481, 491–492 | Positive |
 | Sub-delimiter encoding in path | 620–628 | Positive |
 | Multiple unreserved decodings | 630–632 | Positive |
 | Structural non-equivalence | 300–310, 490, 530–541, 550–558 | Negative |
-| Encoding traps | 700–704 | Negative |
+| Encoded dot segments (§6.2.2.2 + §6.2.2.3) | 700–701 | Positive |
+| Encoding traps | 702–704 | Negative |
 | RFC 3986 explicit examples | 610–611 | Positive |
-| Real-world scenarios | 400–404, 600–603 | Mixed |
+| Real-world scenarios | 400–404, 601–603 | Mixed |
+| Kafka URIs | 710–718 | Mixed |
+| CockroachDB / PostgreSQL URIs | 720–729 | Mixed |
+
+### `uriparser_test.c`
+
+Thin C wrapper around [uriparser](https://uriparser.github.io/) — reports what the library says with zero custom normalization. Supports `--parse` (validity check) and `--equiv` (equivalence via `uriNormalizeSyntaxA`).
+
+### `python_uri_test.py`
+
+Second canonical validator using Python's `urllib.parse`. Implements all three RFC 3986 §6 normalization levels (syntax, scheme, protocol) using only stdlib. No external dependencies.
+
+### `run_uriparser_tests.sh`
+
+Runs both validators against the SQL test data and produces a comparison report showing where they agree and disagree.
 
 ### `test_setup.sh`
 
@@ -103,6 +120,24 @@ CockroachDB test harness that:
 - Cleans up on exit (kills CockroachDB, removes PID file)
 
 ## Quick start
+
+### Validate test data against canonical parsers
+
+```bash
+# Prerequisites: uriparser (brew install uriparser), Python 3
+make test
+```
+
+This builds the C program, runs both validators, and produces a comparison report:
+
+```
+Both PASS:        103 groups  (test data confirmed by both canonical parsers)
+Python-only PASS:  70 groups  (Python covers scheme/protocol; uriparser only does syntax)
+Both FAIL:          0 groups
+Disagree:           0 groups
+```
+
+### Validate with CockroachDB
 
 ```bash
 # Prerequisites: cockroach CLI (https://www.cockroachlabs.com/docs/releases)
