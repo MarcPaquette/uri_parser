@@ -1,0 +1,4 @@
+# CockroachDB temp artifacts
+heap_profiler/
+cockroach-data/
+*.pprof
