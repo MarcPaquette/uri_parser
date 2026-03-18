@@ -2,3 +2,13 @@
 heap_profiler/
 cockroach-data/
 *.pprof
+goroutine_dump/
+inflight_trace_dump/
+pprof_dump/
+executiontrace_dump/
+
+# uriparser test binary
+uriparser_test
+
+# Python
+__pycache__/

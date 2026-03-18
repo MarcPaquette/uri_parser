@@ -34,6 +34,9 @@ INSERT INTO uri_test_data (id, uri, description) VALUES
 (21,  's3://my-bucket/my-key',                       'S3 scheme'),
 (22,  'ws://example.com/socket',                     'WebSocket scheme'),
 (23,  'wss://example.com/socket',                    'Secure WebSocket scheme'),
+(24,  'kafka://broker.example.com:9092',             'Kafka scheme'),
+(25,  'kafka+ssl://broker.example.com:9093',         'Kafka with SSL (compound scheme)'),
+(26,  'postgresql://root@localhost:26257/defaultdb', 'CockroachDB connection (postgresql scheme)'),
 
 -- =============================================================================
 -- AUTHORITY / HOST VARIATIONS
@@ -471,4 +474,44 @@ INSERT INTO uri_test_data (id, uri, description) VALUES
 (2802, 'http://[0000:0000:0000:0000:0000:0000:0000:0000]/',                          'IPv6 all-zeros fully expanded'),
 (2803, 'http://[fe80::1%25en0]',                                                     'IPv6 link-local with zone ID (RFC 6874, not RFC 3986)'),
 (2804, 'http://[2001:db8:a::123]/',                                                  'IPv6 with mixed-length groups'),
-(2805, 'http://[::ffff:192.0.2.1]/',                                                 'IPv4-mapped IPv6 (dual form)');
+(2805, 'http://[::ffff:192.0.2.1]/',                                                 'IPv4-mapped IPv6 (dual form)'),
+
+-- =============================================================================
+-- KAFKA URIs
+-- =============================================================================
+
+(2900, 'kafka://broker.example.com:9092',                                            'Kafka broker basic'),
+(2901, 'kafka://broker.example.com:9092/my-topic',                                   'Kafka broker with topic'),
+(2902, 'kafka://broker.example.com',                                                  'Kafka broker no port'),
+(2903, 'kafka://broker.example.com:9092/my-topic?timeout=5000',                       'Kafka with query param'),
+(2904, 'kafka://user:pass@broker.example.com:9092/my-topic',                          'Kafka with SASL credentials'),
+(2905, 'kafka+ssl://broker.example.com:9093',                                         'Kafka SSL compound scheme'),
+(2906, 'kafka+ssl://broker.example.com:9093/my-topic',                                'Kafka SSL with topic'),
+(2907, 'kafka://broker1.example.com:9092,broker2.example.com:9092/my-topic',          'Kafka multi-broker (comma invalid per RFC 3986)'),
+(2908, 'KAFKA://BROKER.EXAMPLE.COM:9092/my-topic',                                   'Kafka uppercase scheme and host'),
+(2909, 'kafka://broker.example.com:9092/my-topic#partition-0',                        'Kafka with fragment (partition hint)'),
+(2910, 'kafka://broker.example.com:9092/my.topic.name',                               'Kafka dotted topic name'),
+(2911, 'kafka://broker.example.com:9092/topic?group.id=my-group&auto.offset.reset=earliest', 'Kafka consumer config query'),
+(2912, 'kafka://10.0.0.1:9092/topic',                                                 'Kafka with IPv4 broker'),
+(2913, 'kafka://[::1]:9092/topic',                                                    'Kafka with IPv6 broker'),
+(2914, 'kafka://broker.example.com:9092/',                                            'Kafka with trailing slash, no topic'),
+
+-- =============================================================================
+-- COCKROACHDB URIs
+-- =============================================================================
+
+(2920, 'postgresql://root@localhost:26257/defaultdb',                                  'CockroachDB basic connection'),
+(2921, 'postgresql://root@localhost:26257/defaultdb?sslmode=disable',                  'CockroachDB with SSL disabled'),
+(2922, 'postgresql://root@localhost:26257/movr?sslmode=verify-full&sslrootcert=/certs/ca.crt', 'CockroachDB with SSL certs'),
+(2923, 'postgresql://user:password@free-tier.gcp-us-central1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full', 'CockroachDB Cloud connection'),
+(2924, 'postgresql://root@localhost:26257/',                                           'CockroachDB with trailing slash, no db'),
+(2925, 'postgresql://root@localhost:26257',                                            'CockroachDB no path'),
+(2926, 'POSTGRESQL://ROOT@LOCALHOST:26257/defaultdb',                                  'CockroachDB uppercase scheme+userinfo+host'),
+(2927, 'postgres://root@localhost:26257/defaultdb',                                    'CockroachDB with postgres:// alias'),
+(2928, 'postgresql://root@localhost:26257/defaultdb?options=--cluster%3Dfree-tier-123', 'CockroachDB with encoded cluster option'),
+(2929, 'postgresql://root@localhost:26257/db%2Dname',                                  'CockroachDB with percent-encoded db name'),
+(2930, 'postgresql://root:pass%40word@localhost:26257/defaultdb',                       'CockroachDB with encoded @ in password'),
+(2931, 'postgresql://root@127.0.0.1:26257/defaultdb',                                  'CockroachDB with IPv4 host'),
+(2932, 'postgresql://root@[::1]:26257/defaultdb',                                      'CockroachDB with IPv6 host'),
+(2933, 'postgresql://root@localhost:5432/defaultdb',                                    'PostgreSQL standard port (not CockroachDB)'),
+(2934, 'postgresql://root@crdb-node1.example.com:26257/defaultdb?application_name=myapp&connect_timeout=10', 'CockroachDB with app config params');

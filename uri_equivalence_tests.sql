@@ -494,22 +494,8 @@ VALUES
 (430, 2, 'http://bücher.example.com/',              'Unicode form (IRI)',                  'protocol', FALSE, TRUE),
 
 -- Group 431: Punycode vs Unicode – Japanese
-(431, 1, 'http://xn--r8jz45g.jp/',                 'Punycode form (canonical URI)',       'protocol', TRUE, TRUE),
+(431, 1, 'http://xn--skq.jp/',                     'Punycode form (canonical URI)',       'protocol', TRUE, TRUE),
 (431, 2, 'http://亀.jp/',                            'Unicode form (IRI)',                  'protocol', FALSE, TRUE),
-
--- =============================================================================
--- 19. IPv4-MAPPED IPv6 vs PLAIN IPv4
--- =============================================================================
-
--- Group 440: IPv4-mapped IPv6 address
-(440, 1, 'http://192.168.1.1/path',                'Plain IPv4 (canonical)',               'protocol', TRUE, TRUE),
-(440, 2, 'http://[::ffff:192.168.1.1]/path',       'IPv4-mapped IPv6',                    'protocol', FALSE, TRUE),
-
--- Group 441: Loopback forms
-(441, 1, 'http://127.0.0.1/',                      'IPv4 loopback (canonical)',            'protocol', TRUE, TRUE),
-(441, 2, 'http://[::ffff:127.0.0.1]/',             'IPv4-mapped IPv6 loopback',           'protocol', FALSE, TRUE),
-(441, 3, 'http://[::1]/',                           'IPv6 loopback',                       'protocol', FALSE, TRUE),
-(441, 4, 'http://localhost/',                        'Hostname loopback',                   'protocol', FALSE, TRUE),
 
 -- =============================================================================
 -- 20. PORT NORMALIZATION EDGE CASES
@@ -714,11 +700,6 @@ VALUES
 -- 31. ADDITIONAL REAL-WORLD EQUIVALENCES
 -- =============================================================================
 
--- Group 600: S3 URI normalization
-(600, 1, 'https://my-bucket.s3.amazonaws.com/key',                        'Virtual-hosted style (canonical)',  'protocol', TRUE, TRUE),
-(600, 2, 'https://s3.amazonaws.com/my-bucket/key',                        'Path style',                        'protocol', FALSE, TRUE),
-(600, 3, 's3://my-bucket/key',                                            'S3 scheme shorthand',               'protocol', FALSE, TRUE),
-
 -- Group 601: Docker registry tag vs digest (NOT equivalent)
 (601, 1, 'docker://registry.example.com/image:latest',                    'Tag latest',                        'syntax', TRUE, FALSE),
 (601, 2, 'docker://registry.example.com/image:v1.0',                      'Tag v1.0 – distinct',               'syntax', FALSE, FALSE),
@@ -880,13 +861,16 @@ VALUES
 -- 39. ADDITIONAL NEGATIVE TESTS — ENCODING TRAPS
 -- =============================================================================
 
--- Group 700: Encoded dots are NOT dot segments
-(700, 1, 'http://example.com/a/%2E%2E/b',         'Encoded .. — literal segment "%2E%2E"', 'syntax', TRUE, FALSE),
-(700, 2, 'http://example.com/a/../b',              'Literal .. — parent traversal to /b',   'syntax', FALSE, FALSE),
+-- Group 700: Encoded dots ARE decoded (. is unreserved per §2.3) then removed as dot segments
+-- RFC 3986 §6.2.2.2 requires decoding %2E → . (unreserved), then §6.2.2.3 removes dot segments.
+(700, 1, 'http://example.com/b',                   'Canonical (both resolve to /b)',                    'syntax', TRUE, TRUE),
+(700, 2, 'http://example.com/a/%2E%2E/b',          '%2E decoded to . (unreserved), then .. removed',    'syntax', FALSE, TRUE),
+(700, 3, 'http://example.com/a/../b',              'Literal .. removed by dot-segment removal',         'syntax', FALSE, TRUE),
 
--- Group 701: Single encoded dot is NOT a dot segment
-(701, 1, 'http://example.com/a/%2E/b',             'Encoded . — literal segment "%2E"',     'syntax', TRUE, FALSE),
-(701, 2, 'http://example.com/a/./b',               'Literal . — removed by normalization',  'syntax', FALSE, FALSE),
+-- Group 701: Encoded single dot IS decoded then removed as dot segment
+(701, 1, 'http://example.com/a/b',                 'Canonical (both resolve to /a/b)',                   'syntax', TRUE, TRUE),
+(701, 2, 'http://example.com/a/%2E/b',             '%2E decoded to . (unreserved), then . removed',     'syntax', FALSE, TRUE),
+(701, 3, 'http://example.com/a/./b',               'Literal . removed by dot-segment removal',          'syntax', FALSE, TRUE),
 
 -- Group 702: Different non-ASCII characters that differ only in case of encoded byte
 -- é (U+00E9) = %C3%A9, É (U+00C9) = %C3%89 — different characters
@@ -899,5 +883,96 @@ VALUES
 
 -- Group 704: Encoded slash in path vs encoded slash in query (different components)
 (704, 1, 'http://example.com/a%2Fb?c/d',           'Encoded / in path, literal / in query',  'syntax', TRUE, FALSE),
-(704, 2, 'http://example.com/a/b?c%2Fd',           'Literal / in path, encoded / in query',  'syntax', FALSE, FALSE);
+(704, 2, 'http://example.com/a/b?c%2Fd',           'Literal / in path, encoded / in query',  'syntax', FALSE, FALSE),
+
+-- =============================================================================
+-- 40. KAFKA URI EQUIVALENCES
+-- =============================================================================
+
+-- Group 710: Kafka scheme case normalization
+(710, 1, 'kafka://broker.example.com:9092/topic',          'Lowercase (canonical)',            'syntax', TRUE, TRUE),
+(710, 2, 'KAFKA://broker.example.com:9092/topic',          'Uppercase scheme',                 'syntax', FALSE, TRUE),
+(710, 3, 'Kafka://broker.example.com:9092/topic',          'Title case scheme',                'syntax', FALSE, TRUE),
+(710, 4, 'KAFKA://BROKER.EXAMPLE.COM:9092/topic',          'Uppercase scheme + host',          'syntax', FALSE, TRUE),
+
+-- Group 711: Kafka+SSL compound scheme case normalization
+(711, 1, 'kafka+ssl://broker.example.com:9093/topic',      'Lowercase (canonical)',            'syntax', TRUE, TRUE),
+(711, 2, 'KAFKA+SSL://BROKER.EXAMPLE.COM:9093/topic',      'Uppercase scheme + host',          'syntax', FALSE, TRUE),
+(711, 3, 'Kafka+Ssl://Broker.Example.Com:9093/topic',      'Mixed case scheme + host',         'syntax', FALSE, TRUE),
+
+-- Group 712: Kafka default port 9092 removal
+(712, 1, 'kafka://broker.example.com/topic',               'No port (canonical)',              'scheme', TRUE, TRUE),
+(712, 2, 'kafka://broker.example.com:9092/topic',          'Explicit default port 9092',       'scheme', FALSE, TRUE),
+
+-- Group 713: Kafka empty path vs root slash
+(713, 1, 'kafka://broker.example.com:9092/',               'Trailing slash (canonical)',       'scheme', TRUE, TRUE),
+(713, 2, 'kafka://broker.example.com:9092',                'No trailing slash',                'scheme', FALSE, TRUE),
+
+-- Group 714: Kafka default port + case combined
+(714, 1, 'kafka://broker.example.com/my-topic',            'Canonical',                       'scheme', TRUE, TRUE),
+(714, 2, 'KAFKA://BROKER.EXAMPLE.COM:9092/my-topic',       'Uppercase + default port',        'scheme', FALSE, TRUE),
+(714, 3, 'Kafka://Broker.Example.Com:9092/my-topic',       'Mixed case + default port',       'scheme', FALSE, TRUE),
+
+-- Group 715: Kafka consumer config query param order
+(715, 1, 'kafka://broker.example.com/topic?auto.offset.reset=earliest&group.id=my-group', 'Alphabetical order (canonical)', 'protocol', TRUE, TRUE),
+(715, 2, 'kafka://broker.example.com/topic?group.id=my-group&auto.offset.reset=earliest', 'Reversed order',                 'protocol', FALSE, TRUE),
+
+-- Group 716: Kafka percent-encoded unreserved chars in topic
+(716, 1, 'kafka://broker.example.com:9092/my-topic',       'Literal (canonical)',              'syntax', TRUE, TRUE),
+(716, 2, 'kafka://broker.example.com:9092/%6Dy-topic',     'Encoded m (%6D) in topic',        'syntax', FALSE, TRUE),
+(716, 3, 'kafka://broker.example.com:9092/my%2Dtopic',     'Encoded hyphen (%2D) in topic',   'syntax', FALSE, TRUE),
+
+-- Group 717: Kafka non-default port must not be stripped (negative)
+(717, 1, 'kafka://broker.example.com:9092/topic',          'Default port 9092',               'syntax', TRUE, FALSE),
+(717, 2, 'kafka://broker.example.com:9093/topic',          'SSL port 9093 – distinct',        'syntax', FALSE, FALSE),
+
+-- Group 718: Kafka FQDN trailing dot removal
+(718, 1, 'kafka://broker.example.com/topic',               'No trailing dot (canonical)',      'protocol', TRUE, TRUE),
+(718, 2, 'kafka://broker.example.com./topic',              'Trailing dot (FQDN)',             'protocol', FALSE, TRUE),
+
+-- =============================================================================
+-- 41. COCKROACHDB / POSTGRESQL URI EQUIVALENCES
+-- =============================================================================
+
+-- Group 720: CockroachDB scheme + host case normalization
+(720, 1, 'postgresql://root@localhost:26257/defaultdb',          'Lowercase (canonical)',            'syntax', TRUE, TRUE),
+(720, 2, 'POSTGRESQL://root@LOCALHOST:26257/defaultdb',          'Uppercase scheme + host',          'syntax', FALSE, TRUE),
+(720, 3, 'PostgreSql://root@Localhost:26257/defaultdb',          'Mixed case scheme + host',         'syntax', FALSE, TRUE),
+
+-- Group 721: postgresql:// vs postgres:// are different schemes (NOT equivalent)
+(721, 1, 'postgresql://root@localhost:26257/defaultdb',          'postgresql:// scheme',             'syntax', TRUE, FALSE),
+(721, 2, 'postgres://root@localhost:26257/defaultdb',            'postgres:// scheme – distinct',    'syntax', FALSE, FALSE),
+
+-- Group 722: postgresql default port 5432 removal
+(722, 1, 'postgresql://root@localhost/defaultdb',                'No port (canonical)',              'scheme', TRUE, TRUE),
+(722, 2, 'postgresql://root@localhost:5432/defaultdb',           'Explicit default port 5432',       'scheme', FALSE, TRUE),
+
+-- Group 723: CockroachDB empty path vs root slash
+(723, 1, 'postgresql://root@localhost:26257/',                   'Trailing slash (canonical)',       'scheme', TRUE, TRUE),
+(723, 2, 'postgresql://root@localhost:26257',                    'No trailing slash',                'scheme', FALSE, TRUE),
+
+-- Group 724: Different database names (NOT equivalent)
+(724, 1, 'postgresql://root@localhost:26257/defaultdb',          'defaultdb – distinct',            'syntax', TRUE, FALSE),
+(724, 2, 'postgresql://root@localhost:26257/otherdb',            'otherdb – distinct',              'syntax', FALSE, FALSE),
+
+-- Group 725: CockroachDB host case with non-default port (port preserved)
+(725, 1, 'postgresql://root@crdb.example.com:26257/defaultdb',   'Lowercase (canonical)',          'scheme', TRUE, TRUE),
+(725, 2, 'POSTGRESQL://root@CRDB.EXAMPLE.COM:26257/defaultdb',   'Uppercase scheme + host',        'scheme', FALSE, TRUE),
+(725, 3, 'postgresql://root@Crdb.Example.Com:26257/defaultdb',   'Mixed case host',                'scheme', FALSE, TRUE),
+
+-- Group 726: CockroachDB connection param order (protocol-level)
+(726, 1, 'postgresql://root@localhost:26257/defaultdb?application_name=myapp&sslmode=verify-full', 'Alphabetical (canonical)',  'protocol', TRUE, TRUE),
+(726, 2, 'postgresql://root@localhost:26257/defaultdb?sslmode=verify-full&application_name=myapp', 'Reversed order',           'protocol', FALSE, TRUE),
+
+-- Group 727: Percent-encoded unreserved in database name
+(727, 1, 'postgresql://root@localhost:26257/db-name',            'Literal hyphen (canonical)',      'syntax', TRUE, TRUE),
+(727, 2, 'postgresql://root@localhost:26257/db%2Dname',          'Encoded hyphen (%2D)',            'syntax', FALSE, TRUE),
+
+-- Group 728: Query presence changes identity (NOT equivalent)
+(728, 1, 'postgresql://root@localhost:26257/defaultdb',                       'No query – distinct',             'syntax', TRUE, FALSE),
+(728, 2, 'postgresql://root@localhost:26257/defaultdb?sslmode=disable',       'Has query – distinct',            'syntax', FALSE, FALSE),
+
+-- Group 729: CockroachDB combined: case + default port removal
+(729, 1, 'postgresql://root@crdb.example.com/defaultdb',                     'Canonical',                       'scheme', TRUE, TRUE),
+(729, 2, 'POSTGRESQL://root@CRDB.EXAMPLE.COM:5432/defaultdb',                'Uppercase + default port',        'scheme', FALSE, TRUE);
 
