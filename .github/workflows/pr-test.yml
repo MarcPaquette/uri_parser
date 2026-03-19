@@ -1,0 +1,116 @@
+name: URI Test Data Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  cockroachdb-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      cockroachdb:
+        image: cockroachdb/cockroach:latest
+        env:
+          COCKROACH_DATABASE: uri_test
+        ports:
+          - 26257:26257
+          - 8080:8080
+        options: >-
+          --health-cmd "curl -f http://localhost:8080/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 10s
+          --name cockroachdb
+        # start-single-node --insecure serves SQL on 26257 and HTTP on 8080
+        command: start-single-node --insecure --store=type=mem,size=640MiB
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install CockroachDB CLI
+        run: |
+          curl -fsSL https://binaries.cockroachdb.com/cockroach-latest.linux-amd64.tgz | tar xz
+          sudo cp cockroach-*/cockroach /usr/local/bin/
+          cockroach version
+
+      - name: Create test database
+        run: cockroach sql --insecure --host=127.0.0.1:26257 -e "CREATE DATABASE uri_test;"
+
+      - name: Load uri_test_data.sql
+        run: cockroach sql --insecure --host=127.0.0.1:26257 --database=uri_test < uri_test_data.sql
+
+      - name: Load uri_equivalence_tests.sql
+        run: cockroach sql --insecure --host=127.0.0.1:26257 --database=uri_test < uri_equivalence_tests.sql
+
+      - name: Validate test data
+        run: |
+          PASS=0
+          FAIL=0
+
+          check() {
+            local description="$1"
+            local query="$2"
+            local expected="$3"
+
+            actual=$(cockroach sql --insecure --host=127.0.0.1:26257 --database=uri_test --format=tsv -e "$query" | tail -1)
+            if [ "$actual" = "$expected" ]; then
+              echo "  PASS: $description"
+              PASS=$((PASS + 1))
+            else
+              echo "  FAIL: $description (expected '$expected', got '$actual')"
+              FAIL=$((FAIL + 1))
+            fi
+          }
+
+          echo "Running validation checks..."
+
+          # uri_test_data checks
+          check "uri_test_data has rows" \
+            "SELECT count(*) > 0 FROM uri_test_data;" "t"
+
+          check "uri_test_data IDs are unique" \
+            "SELECT count(*) = count(DISTINCT id) FROM uri_test_data;" "t"
+
+          check "uri_test_data has no NULL URIs" \
+            "SELECT count(*) FROM uri_test_data WHERE uri IS NULL;" "0"
+
+          check "uri_test_data has no NULL descriptions" \
+            "SELECT count(*) FROM uri_test_data WHERE description IS NULL;" "0"
+
+          # uri_equivalence_tests checks
+          check "uri_equivalence_tests has rows" \
+            "SELECT count(*) > 0 FROM uri_equivalence_tests;" "t"
+
+          check "uri_equivalence_tests PKs are unique" \
+            "SELECT count(*) = count(DISTINCT (group_id, variant_id)) FROM uri_equivalence_tests;" "t"
+
+          check "Every equivalence group has at least 2 variants" \
+            "SELECT count(*) FROM (SELECT group_id FROM uri_equivalence_tests GROUP BY group_id HAVING count(*) < 2);" "0"
+
+          check "Every equivalence group has exactly one canonical variant" \
+            "SELECT count(*) FROM (SELECT group_id FROM uri_equivalence_tests WHERE is_canonical = true GROUP BY group_id HAVING count(*) != 1);" "0"
+
+          check "normalization_level values are valid" \
+            "SELECT count(*) FROM uri_equivalence_tests WHERE normalization_level NOT IN ('syntax', 'scheme', 'protocol');" "0"
+
+          check "Positive groups (is_equivalent=true) exist" \
+            "SELECT count(DISTINCT group_id) > 0 FROM uri_equivalence_tests WHERE is_equivalent = true;" "t"
+
+          check "Negative groups (is_equivalent=false) exist" \
+            "SELECT count(DISTINCT group_id) > 0 FROM uri_equivalence_tests WHERE is_equivalent = false;" "t"
+
+          check "No equivalence group mixes is_equivalent values" \
+            "SELECT count(*) FROM (SELECT group_id FROM uri_equivalence_tests GROUP BY group_id HAVING count(DISTINCT is_equivalent) > 1);" "0"
+
+          check "Stress test URIs with REPEAT() loaded correctly" \
+            "SELECT length(uri) > 100 FROM uri_test_data WHERE id = 1200;" "t"
+
+          echo ""
+          echo "Results: $PASS passed, $FAIL failed out of $((PASS + FAIL)) checks."
+
+          if [ "$FAIL" -gt 0 ]; then
+            exit 1
+          fi
