@@ -26,7 +26,10 @@ DECLARE
   pos INT;
   hex_str TEXT;
   code INT;
-  hex_chars TEXT := '0123456789abcdef';
+  c1 CHAR;
+  c2 CHAR;
+  v1 INT;
+  v2 INT;
 BEGIN
   IF input IS NULL THEN RETURN NULL; END IF;
   IF position('%' IN input) = 0 THEN RETURN input; END IF;
@@ -43,9 +46,21 @@ BEGIN
     END IF;
     IF pos + 2 <= length(remainder) THEN
       hex_str := substring(remainder FROM pos + 1 FOR 2);
-      IF hex_str ~ '^[0-9A-Fa-f]{2}$' THEN
-        code := (position(lower(left(hex_str, 1)) IN hex_chars) - 1) * 16
-              + (position(lower(right(hex_str, 1)) IN hex_chars) - 1);
+      c1 := left(hex_str, 1);
+      c2 := right(hex_str, 1);
+      -- validate hex chars and convert in one step
+      IF (c1 >= '0' AND c1 <= '9') THEN v1 := ascii(c1) - 48;
+      ELSIF (c1 >= 'a' AND c1 <= 'f') THEN v1 := ascii(c1) - 87;
+      ELSIF (c1 >= 'A' AND c1 <= 'F') THEN v1 := ascii(c1) - 55;
+      ELSE v1 := -1;
+      END IF;
+      IF (c2 >= '0' AND c2 <= '9') THEN v2 := ascii(c2) - 48;
+      ELSIF (c2 >= 'a' AND c2 <= 'f') THEN v2 := ascii(c2) - 87;
+      ELSIF (c2 >= 'A' AND c2 <= 'F') THEN v2 := ascii(c2) - 55;
+      ELSE v2 := -1;
+      END IF;
+      IF v1 >= 0 AND v2 >= 0 THEN
+        code := v1 * 16 + v2;
         IF code BETWEEN 65 AND 90
             OR code BETWEEN 97 AND 122
             OR code BETWEEN 48 AND 57
@@ -64,7 +79,7 @@ BEGIN
   END LOOP;
   RETURN result;
 END;
-$$ LANGUAGE PLpgSQL STABLE;
+$$ LANGUAGE PLpgSQL IMMUTABLE;
 
 -- helper: remove dot segments from a path per RFC 3986 Section 5.2.4
 CREATE OR REPLACE FUNCTION _uri_remove_dot_segments(input TEXT) RETURNS TEXT AS $$
@@ -82,8 +97,8 @@ BEGIN
     IF buf = '/.'             THEN  buf := '/'; CONTINUE; END IF;
     IF left(buf, 4) = '/../' OR buf = '/..' THEN
       IF buf = '/..' THEN buf := '/'; ELSE buf := '/' || substring(buf FROM 5); END IF;
-      IF output ~ '/' THEN
-        output := regexp_replace(output, '/[^/]*$', '');
+      IF position('/' IN output) > 0 THEN
+        output := left(output, length(output) - position('/' IN reverse(output)));
       ELSE
         output := '';
       END IF;
@@ -112,7 +127,7 @@ BEGIN
   END LOOP;
   RETURN output;
 END;
-$$ LANGUAGE PLpgSQL STABLE;
+$$ LANGUAGE PLpgSQL IMMUTABLE;
 
 -- helper: well-known default ports per scheme
 CREATE OR REPLACE FUNCTION _uri_default_port(scheme TEXT) RETURNS INT AS $$
@@ -132,10 +147,10 @@ $$ LANGUAGE SQL IMMUTABLE;
 -- Input: content between [ and ], already lowercased. Output: compressed canonical form.
 CREATE OR REPLACE FUNCTION _uri_normalize_ipv6(addr TEXT) RETURNS TEXT AS $$
 DECLARE
-  hex_chars TEXT := '0123456789abcdef';
   ipv4_tail TEXT := '';
   prefix TEXT;
   expanded TEXT;
+  groups TEXT[];
   left_part TEXT;
   right_part TEXT;
   left_count INT;
@@ -147,10 +162,10 @@ DECLARE
   cur_start INT := 0;
   cur_len INT := 0;
   sep_pos INT;
-  tmp TEXT;
   grp TEXT;
   hi INT;
   lo INT;
+  c CHAR;
   i INT;
   result TEXT;
 BEGIN
@@ -198,46 +213,72 @@ BEGIN
     expanded := prefix;
   END IF;
 
-  -- Step 3: Strip leading zeros from each group
-  tmp := '';
+  -- Step 3: Strip leading zeros from each group (build new string directly)
+  result := '';
   i := 1;
   WHILE i <= total_groups LOOP
-    IF i > 1 THEN tmp := tmp || ':'; END IF;
+    IF i > 1 THEN result := result || ':'; END IF;
     grp := split_part(expanded, ':', i);
-    grp := regexp_replace(grp, '^0+(.)', '\1');
+    WHILE length(grp) > 1 AND left(grp, 1) = '0' LOOP
+      grp := substring(grp FROM 2);
+    END LOOP;
     IF grp = '' THEN grp := '0'; END IF;
-    tmp := tmp || grp;
+    result := result || grp;
     i := i + 1;
   END LOOP;
-  expanded := tmp;
+  expanded := result;
+
+  -- Convert to array for O(1) read access (replaces repeated split_part calls below)
+  groups := string_to_array(expanded, ':');
 
   -- Step 6: IPv4-mapped conversion (::ffff:hex:hex -> ::ffff:d.d.d.d)
   IF total_groups = 8 AND ipv4_tail = '' THEN
-    IF split_part(expanded, ':', 1) = '0'
-       AND split_part(expanded, ':', 2) = '0'
-       AND split_part(expanded, ':', 3) = '0'
-       AND split_part(expanded, ':', 4) = '0'
-       AND split_part(expanded, ':', 5) = '0'
-       AND split_part(expanded, ':', 6) = 'ffff'
+    IF groups[1] = '0'
+       AND groups[2] = '0'
+       AND groups[3] = '0'
+       AND groups[4] = '0'
+       AND groups[5] = '0'
+       AND groups[6] = 'ffff'
     THEN
-      grp := lpad(split_part(expanded, ':', 7), 4, '0');
-      hi := (position(substring(grp FROM 1 FOR 1) IN hex_chars) - 1) * 16
-          + (position(substring(grp FROM 2 FOR 1) IN hex_chars) - 1);
-      lo := (position(substring(grp FROM 3 FOR 1) IN hex_chars) - 1) * 16
-          + (position(substring(grp FROM 4 FOR 1) IN hex_chars) - 1);
+      grp := lpad(groups[7], 4, '0');
+      c := substring(grp FROM 1 FOR 1);
+      IF c >= '0' AND c <= '9' THEN hi := ascii(c) - 48;
+      ELSE hi := ascii(c) - 87; END IF;
+      hi := hi * 16;
+      c := substring(grp FROM 2 FOR 1);
+      IF c >= '0' AND c <= '9' THEN hi := hi + ascii(c) - 48;
+      ELSE hi := hi + ascii(c) - 87; END IF;
+      c := substring(grp FROM 3 FOR 1);
+      IF c >= '0' AND c <= '9' THEN lo := ascii(c) - 48;
+      ELSE lo := ascii(c) - 87; END IF;
+      lo := lo * 16;
+      c := substring(grp FROM 4 FOR 1);
+      IF c >= '0' AND c <= '9' THEN lo := lo + ascii(c) - 48;
+      ELSE lo := lo + ascii(c) - 87; END IF;
       ipv4_tail := hi::TEXT || '.' || lo::TEXT;
 
-      grp := lpad(split_part(expanded, ':', 8), 4, '0');
-      hi := (position(substring(grp FROM 1 FOR 1) IN hex_chars) - 1) * 16
-          + (position(substring(grp FROM 2 FOR 1) IN hex_chars) - 1);
-      lo := (position(substring(grp FROM 3 FOR 1) IN hex_chars) - 1) * 16
-          + (position(substring(grp FROM 4 FOR 1) IN hex_chars) - 1);
+      grp := lpad(groups[8], 4, '0');
+      c := substring(grp FROM 1 FOR 1);
+      IF c >= '0' AND c <= '9' THEN hi := ascii(c) - 48;
+      ELSE hi := ascii(c) - 87; END IF;
+      hi := hi * 16;
+      c := substring(grp FROM 2 FOR 1);
+      IF c >= '0' AND c <= '9' THEN hi := hi + ascii(c) - 48;
+      ELSE hi := hi + ascii(c) - 87; END IF;
+      c := substring(grp FROM 3 FOR 1);
+      IF c >= '0' AND c <= '9' THEN lo := ascii(c) - 48;
+      ELSE lo := ascii(c) - 87; END IF;
+      lo := lo * 16;
+      c := substring(grp FROM 4 FOR 1);
+      IF c >= '0' AND c <= '9' THEN lo := lo + ascii(c) - 48;
+      ELSE lo := lo + ascii(c) - 87; END IF;
       ipv4_tail := ipv4_tail || '.' || hi::TEXT || '.' || lo::TEXT;
 
       total_groups := 6;
-      expanded := split_part(expanded, ':', 1) || ':' || split_part(expanded, ':', 2) || ':'
-               || split_part(expanded, ':', 3) || ':' || split_part(expanded, ':', 4) || ':'
-               || split_part(expanded, ':', 5) || ':' || split_part(expanded, ':', 6);
+      expanded := groups[1] || ':' || groups[2] || ':'
+               || groups[3] || ':' || groups[4] || ':'
+               || groups[5] || ':' || groups[6];
+      groups := string_to_array(expanded, ':');
     END IF;
   END IF;
 
@@ -246,7 +287,7 @@ BEGIN
   cur_start := 0; cur_len := 0;
   i := 1;
   WHILE i <= total_groups LOOP
-    IF split_part(expanded, ':', i) = '0' THEN
+    IF groups[i] = '0' THEN
       IF cur_len = 0 THEN cur_start := i; END IF;
       cur_len := cur_len + 1;
     ELSE
@@ -263,7 +304,7 @@ BEGIN
     i := 1;
     WHILE i <= best_start - 1 LOOP
       IF i > 1 THEN left_part := left_part || ':'; END IF;
-      left_part := left_part || split_part(expanded, ':', i);
+      left_part := left_part || groups[i];
       i := i + 1;
     END LOOP;
 
@@ -271,7 +312,7 @@ BEGIN
     i := best_start + best_len;
     WHILE i <= total_groups LOOP
       IF i > best_start + best_len THEN right_part := right_part || ':'; END IF;
-      right_part := right_part || split_part(expanded, ':', i);
+      right_part := right_part || groups[i];
       i := i + 1;
     END LOOP;
 
