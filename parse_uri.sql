@@ -128,6 +128,171 @@ CREATE OR REPLACE FUNCTION _uri_default_port(scheme TEXT) RETURNS INT AS $$
   END;
 $$ LANGUAGE SQL IMMUTABLE;
 
+-- helper: normalize IPv6 address to RFC 5952 canonical form
+-- Input: content between [ and ], already lowercased. Output: compressed canonical form.
+CREATE OR REPLACE FUNCTION _uri_normalize_ipv6(addr TEXT) RETURNS TEXT AS $$
+DECLARE
+  hex_chars TEXT := '0123456789abcdef';
+  ipv4_tail TEXT := '';
+  prefix TEXT;
+  expanded TEXT;
+  left_part TEXT;
+  right_part TEXT;
+  left_count INT;
+  right_count INT;
+  fill_count INT;
+  total_groups INT := 8;
+  best_start INT := 0;
+  best_len INT := 0;
+  cur_start INT := 0;
+  cur_len INT := 0;
+  sep_pos INT;
+  tmp TEXT;
+  grp TEXT;
+  hi INT;
+  lo INT;
+  i INT;
+  result TEXT;
+BEGIN
+  prefix := addr;
+
+  -- Step 1: Detect and extract dotted IPv4 tail
+  IF prefix ~ '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' THEN
+    ipv4_tail := regexp_extract(prefix, '([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$');
+    prefix := regexp_replace(prefix, '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$', '');
+    IF right(prefix, 1) = ':' AND right(prefix, 2) != '::' THEN
+      prefix := substring(prefix FROM 1 FOR length(prefix) - 1);
+    END IF;
+    total_groups := 6;
+  END IF;
+
+  -- Step 2: Expand :: to fill missing groups
+  IF position('::' IN prefix) > 0 THEN
+    sep_pos := position('::' IN prefix);
+    left_part := substring(prefix FROM 1 FOR sep_pos - 1);
+    right_part := substring(prefix FROM sep_pos + 2);
+
+    IF left_part = '' THEN left_count := 0;
+    ELSE left_count := length(left_part) - length(replace(left_part, ':', '')) + 1;
+    END IF;
+
+    IF right_part = '' THEN right_count := 0;
+    ELSE right_count := length(right_part) - length(replace(right_part, ':', '')) + 1;
+    END IF;
+
+    fill_count := total_groups - left_count - right_count;
+
+    expanded := '';
+    IF left_part != '' THEN expanded := left_part; END IF;
+    i := 1;
+    WHILE i <= fill_count LOOP
+      IF expanded != '' THEN expanded := expanded || ':'; END IF;
+      expanded := expanded || '0';
+      i := i + 1;
+    END LOOP;
+    IF right_part != '' THEN
+      IF expanded != '' THEN expanded := expanded || ':'; END IF;
+      expanded := expanded || right_part;
+    END IF;
+  ELSE
+    expanded := prefix;
+  END IF;
+
+  -- Step 3: Strip leading zeros from each group
+  tmp := '';
+  i := 1;
+  WHILE i <= total_groups LOOP
+    IF i > 1 THEN tmp := tmp || ':'; END IF;
+    grp := split_part(expanded, ':', i);
+    grp := regexp_replace(grp, '^0+(.)', '\1');
+    IF grp = '' THEN grp := '0'; END IF;
+    tmp := tmp || grp;
+    i := i + 1;
+  END LOOP;
+  expanded := tmp;
+
+  -- Step 6: IPv4-mapped conversion (::ffff:hex:hex -> ::ffff:d.d.d.d)
+  IF total_groups = 8 AND ipv4_tail = '' THEN
+    IF split_part(expanded, ':', 1) = '0'
+       AND split_part(expanded, ':', 2) = '0'
+       AND split_part(expanded, ':', 3) = '0'
+       AND split_part(expanded, ':', 4) = '0'
+       AND split_part(expanded, ':', 5) = '0'
+       AND split_part(expanded, ':', 6) = 'ffff'
+    THEN
+      grp := lpad(split_part(expanded, ':', 7), 4, '0');
+      hi := (position(substring(grp FROM 1 FOR 1) IN hex_chars) - 1) * 16
+          + (position(substring(grp FROM 2 FOR 1) IN hex_chars) - 1);
+      lo := (position(substring(grp FROM 3 FOR 1) IN hex_chars) - 1) * 16
+          + (position(substring(grp FROM 4 FOR 1) IN hex_chars) - 1);
+      ipv4_tail := hi::TEXT || '.' || lo::TEXT;
+
+      grp := lpad(split_part(expanded, ':', 8), 4, '0');
+      hi := (position(substring(grp FROM 1 FOR 1) IN hex_chars) - 1) * 16
+          + (position(substring(grp FROM 2 FOR 1) IN hex_chars) - 1);
+      lo := (position(substring(grp FROM 3 FOR 1) IN hex_chars) - 1) * 16
+          + (position(substring(grp FROM 4 FOR 1) IN hex_chars) - 1);
+      ipv4_tail := ipv4_tail || '.' || hi::TEXT || '.' || lo::TEXT;
+
+      total_groups := 6;
+      expanded := split_part(expanded, ':', 1) || ':' || split_part(expanded, ':', 2) || ':'
+               || split_part(expanded, ':', 3) || ':' || split_part(expanded, ':', 4) || ':'
+               || split_part(expanded, ':', 5) || ':' || split_part(expanded, ':', 6);
+    END IF;
+  END IF;
+
+  -- Step 4: Find longest consecutive run of '0' groups (leftmost wins per RFC 5952)
+  best_start := 0; best_len := 0;
+  cur_start := 0; cur_len := 0;
+  i := 1;
+  WHILE i <= total_groups LOOP
+    IF split_part(expanded, ':', i) = '0' THEN
+      IF cur_len = 0 THEN cur_start := i; END IF;
+      cur_len := cur_len + 1;
+    ELSE
+      IF cur_len > best_len THEN best_start := cur_start; best_len := cur_len; END IF;
+      cur_len := 0;
+    END IF;
+    i := i + 1;
+  END LOOP;
+  IF cur_len > best_len THEN best_start := cur_start; best_len := cur_len; END IF;
+
+  -- Step 5: Replace longest run with :: (only if run length >= 2)
+  IF best_len >= 2 THEN
+    left_part := '';
+    i := 1;
+    WHILE i <= best_start - 1 LOOP
+      IF i > 1 THEN left_part := left_part || ':'; END IF;
+      left_part := left_part || split_part(expanded, ':', i);
+      i := i + 1;
+    END LOOP;
+
+    right_part := '';
+    i := best_start + best_len;
+    WHILE i <= total_groups LOOP
+      IF i > best_start + best_len THEN right_part := right_part || ':'; END IF;
+      right_part := right_part || split_part(expanded, ':', i);
+      i := i + 1;
+    END LOOP;
+
+    result := left_part || '::' || right_part;
+  ELSE
+    result := expanded;
+  END IF;
+
+  -- Append IPv4 tail
+  IF ipv4_tail != '' THEN
+    IF right(result, 1) = ':' THEN
+      result := result || ipv4_tail;
+    ELSE
+      result := result || ':' || ipv4_tail;
+    END IF;
+  END IF;
+
+  RETURN result;
+END;
+$$ LANGUAGE PLpgSQL STABLE;
+
 -- =============================================================================
 -- PHASE 1: Parse URI into raw components (small PL/pgSQL function)
 -- =============================================================================
@@ -242,8 +407,10 @@ BEGIN
   norm_scheme := lower(raw->>'scheme');
 
   IF raw_host IS NOT NULL THEN
-    IF left(raw_host, 1) = '[' THEN
-      norm_host := lower(raw_host);
+    IF raw_host ~ '^\[.*\]$' THEN
+      norm_host := '[' || _uri_normalize_ipv6(
+        lower(substring(raw_host FROM 2 FOR length(raw_host) - 2))
+      ) || ']';
     ELSE
       norm_host := lower(_uri_normalize_pct(raw_host));
     END IF;
@@ -256,7 +423,16 @@ BEGIN
   END IF;
 
   norm_userinfo := _uri_normalize_pct(raw->>'userinfo');
+  IF norm_userinfo IS NOT NULL AND (norm_userinfo = '' OR norm_userinfo = ':') THEN
+    norm_userinfo := NULL;
+  END IF;
   norm_path := _uri_remove_dot_segments(_uri_normalize_pct(raw->>'path'));
+  IF norm_scheme = 'file' AND norm_path ~ '^/[a-z]:' THEN
+    norm_path := '/' || upper(substring(norm_path FROM 2 FOR 1)) || substring(norm_path FROM 3);
+  END IF;
+  IF norm_scheme = 'file' AND norm_host = 'localhost' THEN
+    norm_host := '';
+  END IF;
   norm_query := _uri_normalize_pct(raw_query);
   norm_fragment := _uri_normalize_pct(raw_fragment);
 
@@ -275,6 +451,12 @@ BEGIN
   -- empty path -> "/"
   IF has_authority AND (norm_path IS NULL OR norm_path = '') THEN
     norm_path := '/';
+  END IF;
+
+  -- relative reference: prefix path with ./ to prevent scheme-like confusion
+  IF norm_scheme IS NULL AND NOT has_authority
+     AND norm_path ~ '^[a-zA-Z][a-zA-Z0-9+.-]*:' THEN
+    norm_path := './' || norm_path;
   END IF;
 
   -- reassemble authority
