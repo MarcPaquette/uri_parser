@@ -352,6 +352,62 @@ PROTO_PASS=$(test_sql -e "SELECT count(*) FROM (SELECT group_id FROM uri_equival
 echo "  INFO: $PROTO_PASS / $PROTO_TOTAL protocol-level groups happen to pass"
 echo "        (protocol-level normalization is not implemented)"
 
+# -- I. Performance benchmarks -----------------------------------------------
+echo ""
+echo "-- I. Performance benchmarks ----------------------------------------------"
+
+BENCH_ITERS=100
+
+# Batch benchmark: parse_uri() across all uri_test_data rows
+echo ""
+echo "  parse_uri() x $TD_COUNT URIs x $BENCH_ITERS iterations:"
+BENCH_RESULT=$(test_sql -e "
+  SELECT count(*) AS calls,
+         round(extract(epoch FROM (clock_timestamp() - statement_timestamp())) * 1000)::INT AS ms
+  FROM generate_series(1, $BENCH_ITERS) g, uri_test_data t
+  WHERE parse_uri(t.uri) IS NOT NULL;" | tail -1)
+BENCH_CALLS=$(echo "$BENCH_RESULT" | cut -f1)
+BENCH_MS=$(echo "$BENCH_RESULT" | cut -f2)
+PER_CALL=$(echo "$BENCH_CALLS $BENCH_MS" | awk '{if($1>0) printf "%.1f", $2/$1*1000; else print "N/A"}')
+echo "    ${BENCH_CALLS} calls in ${BENCH_MS}ms (${PER_CALL} µs/call)"
+
+# Batch benchmark: parse_uri() across all uri_equivalence_tests rows
+echo ""
+echo "  parse_uri() x $EQ_COUNT equivalence URIs x $BENCH_ITERS iterations:"
+BENCH_RESULT2=$(test_sql -e "
+  SELECT count(*) AS calls,
+         round(extract(epoch FROM (clock_timestamp() - statement_timestamp())) * 1000)::INT AS ms
+  FROM generate_series(1, $BENCH_ITERS) g, uri_equivalence_tests t
+  WHERE parse_uri(t.uri) IS NOT NULL;" | tail -1)
+BENCH_CALLS2=$(echo "$BENCH_RESULT2" | cut -f1)
+BENCH_MS2=$(echo "$BENCH_RESULT2" | cut -f2)
+PER_CALL2=$(echo "$BENCH_CALLS2 $BENCH_MS2" | awk '{if($1>0) printf "%.1f", $2/$1*1000; else print "N/A"}')
+echo "    ${BENCH_CALLS2} calls in ${BENCH_MS2}ms (${PER_CALL2} µs/call)"
+
+# Per-URI-type latency
+BENCH_SINGLE=1000
+echo ""
+echo "  Per-URI-type latency ($BENCH_SINGLE iterations each):"
+for BENCH_PAIR in \
+  "simple_http|http://example.com/path?q=1#frag" \
+  "complex_auth|http://user:pass@example.com:8080/a/b/c?x=1&y=2#s" \
+  "ipv6|http://[2001:db8::1]:8080/path" \
+  "pct_encoded|http://example.com/%7Euser/%C3%A9?q=%20" \
+  "dot_segments|http://example.com/a/b/../c/./d" \
+  "mailto|mailto:user@example.com" \
+; do
+  BENCH_LABEL="${BENCH_PAIR%%|*}"
+  BENCH_URI="${BENCH_PAIR#*|}"
+  BENCH_URI_ESC=$(echo "$BENCH_URI" | sed "s/'/''/g")
+  BENCH_US=$(test_sql -e "
+    WITH inputs AS (
+      SELECT '${BENCH_URI_ESC}'::TEXT AS uri FROM generate_series(1, $BENCH_SINGLE)
+    )
+    SELECT round(extract(epoch FROM (clock_timestamp() - statement_timestamp())) * 1000000 / $BENCH_SINGLE)::INT
+    FROM inputs WHERE parse_uri(uri) IS NOT NULL HAVING count(*) > 0;" | tail -1)
+  printf "    %-16s %6s µs/call\n" "$BENCH_LABEL" "$BENCH_US"
+done
+
 # ---------------------------------------------------------------------------
 # Show details for any failures
 # ---------------------------------------------------------------------------
