@@ -108,11 +108,43 @@ Second canonical validator using Python's `urllib.parse`. Implements all three R
 
 Runs both validators against the SQL test data and produces a comparison report showing where they agree and disagree.
 
-### `test_setup.sh`
+### `parse_uri.sql`
 
-CockroachDB test harness that:
+**RFC 3986 URI parser and normalizer** implemented as CockroachDB SQL/PL/pgSQL UDFs. Provides two entry points:
+
+| Function | Speed | What it does |
+|---|---|---|
+| `parse_uri(TEXT)` | ~5ms/call | Full RFC 3986 normalization: percent-encoding decode/uppercase, dot-segment removal, IPv6 RFC 5952 compression, file-scheme handling, default port removal |
+| `parse_uri_fast(TEXT)` | **<2ms/call** | Pure SQL (no PL/pgSQL). Handles parsing, case normalization, default port removal, empty path → `/`. Does NOT normalize percent-encoding, dot segments, or IPv6 |
+
+Both return JSONB with keys: `scheme`, `userinfo`, `host`, `port`, `path`, `query`, `fragment`, `authority`, `normalized_uri`.
+
+**Why two functions?** CockroachDB recompiles all PL/pgSQL functions referenced by a statement on every execution (~2s overhead for this function chain). `parse_uri_fast()` avoids PL/pgSQL entirely, giving sub-millisecond response for ad-hoc queries on simple URIs. Use `parse_uri()` when you need full normalization (percent-encoding, dot segments, IPv6) or are processing URIs in bulk within a single statement where the compilation cost is amortized.
+
+```sql
+-- Sub-millisecond for ad-hoc queries (pure SQL, no PL/pgSQL compilation)
+SELECT parse_uri_fast('http://example.com/path?q=1#frag');
+
+-- Full RFC 3986 normalization (PL/pgSQL, ~2s first-call overhead per statement)
+SELECT parse_uri('http://example.com/%7Euser/a/../b');
+```
+
+### `test_parse_uri.sh`
+
+CockroachDB test harness that validates `parse_uri()` against both test datasets:
 
 - Starts a **single-node CockroachDB** with an in-memory store (no disk artifacts)
+- Picks **random ports** (30000–39999) to avoid collisions
+- Creates an **isolated test database** with timestamp+PID name
+- Loads test data, UDFs, and runs **39 validation checks** (sections A–H)
+- Runs **performance benchmarks** (section I): batch throughput and per-URI-type latency
+- Cleans up on exit (kills CockroachDB, removes PID file)
+
+### `test_setup.sh`
+
+Simpler CockroachDB test harness (loads test data only, no UDF validation):
+
+- Starts a **single-node CockroachDB** with an in-memory store
 - Picks **random ports** (30000–39999) to avoid collisions
 - Runs in **insecure mode** (no TLS)
 - Creates an **isolated test database** with timestamp+PID name
@@ -142,11 +174,14 @@ Disagree:           0 groups
 ```bash
 # Prerequisites: cockroach CLI (https://www.cockroachlabs.com/docs/releases)
 
-# Run validation (starts DB, loads data, checks, shuts down)
+# Run full UDF validation + benchmarks (starts DB, loads data + UDFs, checks, shuts down)
+./test_parse_uri.sh
+
+# Run data-only validation (no UDF)
 ./test_setup.sh
 
 # Start DB and keep it running for interactive use
-./test_setup.sh --keep
+./test_parse_uri.sh --keep
 ```
 
 In `--keep` mode, the script prints a connection string:
@@ -155,23 +190,41 @@ In `--keep` mode, the script prints a connection string:
 cockroach sql --insecure --host=127.0.0.1:<port> --database=<db>
 ```
 
-## Usage with a `parse_uri` function
+## Usage
 
-Once you have a `parse_uri()` UDF registered in CockroachDB, you can validate it against the test data:
+### Ad-hoc queries (sub-millisecond)
 
 ```sql
--- Test component extraction
-SELECT id, uri, parse_uri(uri)
+-- parse_uri_fast: pure SQL, no PL/pgSQL overhead
+SELECT parse_uri_fast('http://example.com/path?q=1#frag');
+-- {"scheme": "http", "host": "example.com", "path": "/path", "query": "q=1", ...}
+
+SELECT (parse_uri_fast(uri))->>'host' FROM uri_test_data WHERE id = 1;
+```
+
+### Full normalization
+
+```sql
+-- parse_uri: full RFC 3986 normalization (~2s first-call overhead per statement, ~5ms/call in bulk)
+SELECT parse_uri('http://EXAMPLE.COM/%7Euser/a/../b?q=%31');
+-- {"normalized_uri": "http://example.com/~user/b?q=1", ...}
+
+-- Bulk processing amortizes the compilation cost
+SELECT id, uri, (parse_uri(uri))->>'normalized_uri'
 FROM uri_test_data
 WHERE id IN (1, 7, 14, 110, 300, 1303);
+```
 
+### Equivalence testing
+
+```sql
 -- Test positive equivalence: these MUST normalize to the same output
 SELECT a.group_id, a.uri, b.uri
 FROM uri_equivalence_tests a
 JOIN uri_equivalence_tests b USING (group_id)
 WHERE a.variant_id < b.variant_id
   AND a.is_equivalent = TRUE
-  AND normalize_uri(a.uri) != normalize_uri(b.uri);
+  AND (parse_uri(a.uri))->>'normalized_uri' != (parse_uri(b.uri))->>'normalized_uri';
 -- Expected: 0 rows
 
 -- Test negative equivalence: these MUST NOT normalize to the same output
@@ -180,7 +233,7 @@ FROM uri_equivalence_tests a
 JOIN uri_equivalence_tests b USING (group_id)
 WHERE a.variant_id < b.variant_id
   AND a.is_equivalent = FALSE
-  AND normalize_uri(a.uri) = normalize_uri(b.uri);
+  AND (parse_uri(a.uri))->>'normalized_uri' = (parse_uri(b.uri))->>'normalized_uri';
 -- Expected: 0 rows
 
 -- Filter by normalization level
@@ -190,7 +243,7 @@ JOIN uri_equivalence_tests b USING (group_id)
 WHERE a.variant_id < b.variant_id
   AND a.is_equivalent = TRUE
   AND a.normalization_level = 'syntax'
-  AND normalize_uri(a.uri) != normalize_uri(b.uri);
+  AND (parse_uri(a.uri))->>'normalized_uri' != (parse_uri(b.uri))->>'normalized_uri';
 -- Expected: 0 rows (syntax-level normalization only)
 ```
 
