@@ -88,8 +88,27 @@ extract_equiv_data() {
     echo "  Extracted $count equivalence rows" >&2
 }
 
+extract_invalid_data() {
+    local sql_file="$SCRIPT_DIR/uri_invalid_tests.sql"
+    local count=0
+
+    while IFS= read -r line; do
+        if echo "$line" | grep -qE '^\([0-9]+,'; then
+            local id uri
+            id=$(echo "$line" | sed -E "s/^\(([0-9]+),.*/\1/")
+            uri=$(echo "$line" | sed -E "s/^\\($id, *'//; s/', *'[^']*', *'[^']*', *'[^']*'\\).*//")
+            uri=$(echo "$uri" | sed "s/''/'/g")
+            printf '%s\t%s\n' "$id" "$uri"
+            ((count++))
+        fi
+    done < "$sql_file"
+
+    echo "  Extracted $count invalid URIs" >&2
+}
+
 PARSE_DATA=$(extract_parse_data)
 EQUIV_DATA=$(extract_equiv_data)
+INVALID_DATA=$(extract_invalid_data)
 
 # ── Run both parsers on parse data ───────────────────────────────────
 echo ""
@@ -101,6 +120,17 @@ echo ""
 echo "=== Python urllib.parse: Parse ==="
 PY_PARSE=$(echo "$PARSE_DATA" | python3 python_uri_test.py --parse || true)
 echo "$PY_PARSE"
+
+# ── Run both parsers on invalid URI data ─────────────────────────────
+echo ""
+echo "=== uriparser: Invalid URIs ==="
+C_INVALID=$(echo "$INVALID_DATA" | ./uriparser_test --parse || true)
+echo "$C_INVALID"
+
+echo ""
+echo "=== Python urllib.parse: Invalid URIs ==="
+PY_INVALID=$(echo "$INVALID_DATA" | python3 python_uri_test.py --parse || true)
+echo "$PY_INVALID"
 
 # ── Run both parsers on equivalence data ─────────────────────────────
 echo ""
@@ -141,6 +171,26 @@ END {
 }'
 
 # ── Equivalence comparison ───────────────────────────────────────────
+# ── Invalid URI comparison ────────────────────────────────────────────
+echo ""
+echo "=== Invalid URI Comparison ==="
+
+echo "$C_INVALID"  | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/c_invalid.txt"
+echo "$PY_INVALID" | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/py_invalid.txt"
+
+join "$TMPDIR/c_invalid.txt" "$TMPDIR/py_invalid.txt" 2>/dev/null | awk '
+{
+    if ($2 == "FAIL" && $3 == "FAIL") both_fail++
+    else {
+        problem++
+        print "  PROBLEM id=" $1 "  uriparser=" $2 "  python=" $3 "  (expected both FAIL)"
+    }
+}
+END {
+    print ""
+    print "Invalid URIs: " both_fail+0 " both reject, " problem+0 " unexpected accepts"
+}'
+
 echo ""
 echo "=== Equivalence Comparison ==="
 

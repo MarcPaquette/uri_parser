@@ -83,7 +83,7 @@ WHERE a.variant_id < b.variant_id
 ### UDF validation + benchmarks
 
 ```bash
-# Starts CockroachDB, loads test data + UDFs, runs 39 checks, shuts down
+# Starts CockroachDB, loads test data + UDFs, runs 40 checks, shuts down
 ./test_parse_uri.sh
 
 # Keep DB running for interactive use
@@ -148,6 +148,32 @@ Disagree:           0 groups
 
 Descriptions note RFC 3986 validity — URIs that are invalid per the ABNF (e.g., brackets in query, `#` in fragment) are explicitly marked.
 
+### `uri_invalid_tests.sql`
+
+**36 invalid URIs** where both reference parsers (C/uriparser and Python/urllib) agree the input violates RFC 3986.
+
+**Schema:**
+
+```sql
+CREATE TABLE uri_invalid_tests (
+    id              INT PRIMARY KEY,
+    uri             TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    expected_reason TEXT NOT NULL
+);
+```
+
+**Categories:**
+
+| Category | IDs | Count | Examples |
+|---|---|---|---|
+| `incomplete-pct-encoding` | 3000–3008 | 9 | `%`, `%2`, `%ZZ`, `%G1` in path/query/fragment |
+| `disallowed-char` | 3100–3114 | 15 | Spaces, `<>`, `{}`, `\|`, `\` in various positions |
+| `invalid-scheme` | 3200–3206 | 7 | Digit start, `+.-_` start, empty scheme |
+| `non-numeric-port` | 3300–3303 | 4 | `abc`, `8o80`, `ab80`, `80ab` |
+| `unbalanced-brackets` | 3400 | 1 | Missing closing `]` |
+
 ### `uri_equivalence_tests.sql`
 
 **415 test rows across 173 groups** for validating URI normalization. Each group contains URI variants that should (or should not) normalize to the same output.
@@ -205,7 +231,7 @@ CREATE TABLE uri_equivalence_tests (
 | File | Description |
 |---|---|
 | `parse_uri.sql` | All UDF definitions (`parse_uri`, `parse_uri_fast`, and internal helpers) |
-| `test_parse_uri.sh` | Full UDF validation + benchmarks (39 checks, sections A–I) |
+| `test_parse_uri.sh` | Full UDF validation + benchmarks (40 checks, sections A–J) |
 | `test_setup.sh` | Simpler data-only validation harness (13 checks, no UDF) |
 | `uriparser_test.c` | C wrapper around [uriparser](https://uriparser.github.io/) for validity and equivalence checks |
 | `python_uri_test.py` | Python `urllib.parse` validator implementing all three RFC 3986 §6 normalization levels |

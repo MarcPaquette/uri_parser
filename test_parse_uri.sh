@@ -117,6 +117,12 @@ EQ_COUNT=$(test_sql -e "SELECT count(*) FROM uri_equivalence_tests;" | tail -1)
 echo "  Loaded $EQ_COUNT rows into uri_equivalence_tests."
 
 echo ""
+echo "Loading uri_invalid_tests.sql..."
+test_sql <"$SCRIPT_DIR/uri_invalid_tests.sql"
+INV_COUNT=$(test_sql -e "SELECT count(*) FROM uri_invalid_tests;" | tail -1)
+echo "  Loaded $INV_COUNT rows into uri_invalid_tests."
+
+echo ""
 echo "Loading parse_uri.sql (UDF + helpers)..."
 test_sql <"$SCRIPT_DIR/parse_uri.sql"
 echo "  Functions created."
@@ -342,6 +348,16 @@ check "Negative groups: non-equivalent URIs stay different (0 false matches)" \
   "0"
 
 echo "        ($NEG_TOTAL negative groups tested)"
+
+# -- H2. Invalid URI handling ------------------------------------------------
+echo ""
+echo "-- H2. Invalid URI handling -----------------------------------------------"
+
+check "parse_uri handles every uri_invalid_tests row without crashing" \
+  "SELECT count(*) FROM uri_invalid_tests WHERE parse_uri(uri) IS NOT NULL OR uri = '';" \
+  "$INV_COUNT"
+
+echo "        ($INV_COUNT invalid URIs tested for crash protection)"
 
 # -- H. Protocol-level info (not implemented) --------------------------------
 echo ""
