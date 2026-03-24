@@ -135,6 +135,12 @@ test_sql <"$SCRIPT_DIR/uri_equivalence_tests.sql"
 EQUIV_COUNT=$(test_sql -e "SELECT count(*) FROM uri_equivalence_tests;" | tail -1)
 echo "  Loaded $EQUIV_COUNT rows into uri_equivalence_tests."
 
+echo ""
+echo "Loading uri_invalid_tests.sql..."
+test_sql <"$SCRIPT_DIR/uri_invalid_tests.sql"
+INVALID_COUNT=$(test_sql -e "SELECT count(*) FROM uri_invalid_tests;" | tail -1)
+echo "  Loaded $INVALID_COUNT rows into uri_invalid_tests."
+
 # ---------------------------------------------------------------------------
 # Validate: run basic integrity checks
 # ---------------------------------------------------------------------------
@@ -207,6 +213,23 @@ check "Negative groups (is_equivalent=false) exist" \
 
 check "No equivalence group mixes is_equivalent values" \
   "SELECT count(*) FROM (SELECT group_id FROM uri_equivalence_tests GROUP BY group_id HAVING count(DISTINCT is_equivalent) > 1);" \
+  "0"
+
+# -- uri_invalid_tests checks --
+check "uri_invalid_tests has rows" \
+  "SELECT count(*) > 0 FROM uri_invalid_tests;" \
+  "t"
+
+check "uri_invalid_tests IDs are unique" \
+  "SELECT count(*) = count(DISTINCT id) FROM uri_invalid_tests;" \
+  "t"
+
+check "uri_invalid_tests has no NULL URIs" \
+  "SELECT count(*) FROM uri_invalid_tests WHERE uri IS NULL;" \
+  "0"
+
+check "uri_invalid_tests has no NULL descriptions" \
+  "SELECT count(*) FROM uri_invalid_tests WHERE description IS NULL;" \
   "0"
 
 # -- Cross-file sanity --
