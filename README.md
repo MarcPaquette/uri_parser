@@ -1,6 +1,6 @@
 # uri_parser
 
-RFC 3986 URI parser and normalizer for CockroachDB, with comprehensive test data cross-checked by two canonical parsers (C/uriparser and Python/urllib.parse).
+RFC 3986 URI parser and normalizer for CockroachDB, with comprehensive test data cross-checked by three canonical parsers (C/uriparser, Python/urllib.parse, and Go/net/url).
 
 ## Install
 
@@ -93,11 +93,11 @@ WHERE a.variant_id < b.variant_id
 ### Test data validation against canonical parsers
 
 ```bash
-# Prerequisites: uriparser (brew install uriparser), Python 3
+# Prerequisites: uriparser (brew install uriparser), Python 3, Go 1.21+
 make test
 ```
 
-This builds the C program, runs both validators, and produces a comparison report:
+This builds the C and Go programs, runs all three validators, and produces a comparison report:
 
 ```
 Both PASS:        103 groups  (test data confirmed by both canonical parsers)
@@ -235,7 +235,8 @@ CREATE TABLE uri_equivalence_tests (
 | `test_setup.sh` | Simpler data-only validation harness (13 checks, no UDF) |
 | `uriparser_test.c` | C wrapper around [uriparser](https://uriparser.github.io/) for validity and equivalence checks |
 | `python_uri_test.py` | Python `urllib.parse` validator implementing all three RFC 3986 §6 normalization levels |
-| `run_uriparser_tests.sh` | Runs both canonical validators and produces a comparison report |
+| `go_uri_validator.go` | Go `net/url` validator implementing syntax, scheme, and partial protocol normalization |
+| `run_uriparser_tests.sh` | Runs all three canonical validators and produces a comparison report |
 
 ## References
 
