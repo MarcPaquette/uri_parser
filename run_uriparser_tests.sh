@@ -8,8 +8,8 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 # ── Build ────────────────────────────────────────────────────────────
-echo "=== Building uriparser_test ==="
-make -s
+echo "=== Building uriparser_test and go_uri_validator ==="
+make -s all
 
 # ── Extract URIs from uri_test_data.sql ──────────────────────────────
 echo ""
@@ -121,7 +121,12 @@ echo "=== Python urllib.parse: Parse ==="
 PY_PARSE=$(echo "$PARSE_DATA" | python3 python_uri_test.py --parse || true)
 echo "$PY_PARSE"
 
-# ── Run both parsers on invalid URI data ─────────────────────────────
+echo ""
+echo "=== Go net/url: Parse ==="
+GO_PARSE=$(echo "$PARSE_DATA" | ./go_uri_validator --parse || true)
+echo "$GO_PARSE"
+
+# ── Run all parsers on invalid URI data ──────────────────────────────
 echo ""
 echo "=== uriparser: Invalid URIs ==="
 C_INVALID=$(echo "$INVALID_DATA" | ./uriparser_test --parse || true)
@@ -132,7 +137,12 @@ echo "=== Python urllib.parse: Invalid URIs ==="
 PY_INVALID=$(echo "$INVALID_DATA" | python3 python_uri_test.py --parse || true)
 echo "$PY_INVALID"
 
-# ── Run both parsers on equivalence data ─────────────────────────────
+echo ""
+echo "=== Go net/url: Invalid URIs ==="
+GO_INVALID=$(echo "$INVALID_DATA" | ./go_uri_validator --parse || true)
+echo "$GO_INVALID"
+
+# ── Run all parsers on equivalence data ──────────────────────────────
 echo ""
 echo "=== uriparser: Equivalence ==="
 C_EQUIV=$(echo "$EQUIV_DATA" | ./uriparser_test --equiv || true)
@@ -142,6 +152,11 @@ echo ""
 echo "=== Python urllib.parse: Equivalence ==="
 PY_EQUIV=$(echo "$EQUIV_DATA" | python3 python_uri_test.py --equiv || true)
 echo "$PY_EQUIV"
+
+echo ""
+echo "=== Go net/url: Equivalence ==="
+GO_EQUIV=$(echo "$EQUIV_DATA" | ./go_uri_validator --equiv || true)
+echo "$GO_EQUIV"
 
 # ── Comparison Report ────────────────────────────────────────────────
 echo ""
@@ -156,6 +171,7 @@ echo "=== Parse Comparison ==="
 # Extract "ID STATUS" from each parser (sort -k1,1 for join compatibility)
 echo "$C_PARSE"  | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/c_parse.txt"
 echo "$PY_PARSE" | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/py_parse.txt"
+echo "$GO_PARSE" | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/go_parse.txt"
 
 join "$TMPDIR/c_parse.txt" "$TMPDIR/py_parse.txt" 2>/dev/null | awk '
 {
@@ -167,7 +183,20 @@ join "$TMPDIR/c_parse.txt" "$TMPDIR/py_parse.txt" 2>/dev/null | awk '
 }
 END {
     print ""
-    print "Parse agreement: " agree+0 " URIs agree, " disagree+0 " disagree"
+    print "C vs Python parse agreement: " agree+0 " URIs agree, " disagree+0 " disagree"
+}'
+
+join "$TMPDIR/go_parse.txt" "$TMPDIR/py_parse.txt" 2>/dev/null | awk '
+{
+    if ($2 == $3) agree++
+    else {
+        disagree++
+        print "  DISAGREE id=" $1 "  go=" $2 "  python=" $3
+    }
+}
+END {
+    print ""
+    print "Go vs Python parse agreement: " agree+0 " URIs agree, " disagree+0 " disagree"
 }'
 
 # ── Equivalence comparison ───────────────────────────────────────────
@@ -177,6 +206,7 @@ echo "=== Invalid URI Comparison ==="
 
 echo "$C_INVALID"  | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/c_invalid.txt"
 echo "$PY_INVALID" | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/py_invalid.txt"
+echo "$GO_INVALID" | grep '^PARSE' | awk '{gsub(/\t.*/, "", $3); print $3, $2}' | sort -k1,1 > "$TMPDIR/go_invalid.txt"
 
 join "$TMPDIR/c_invalid.txt" "$TMPDIR/py_invalid.txt" 2>/dev/null | awk '
 {
@@ -188,15 +218,29 @@ join "$TMPDIR/c_invalid.txt" "$TMPDIR/py_invalid.txt" 2>/dev/null | awk '
 }
 END {
     print ""
-    print "Invalid URIs: " both_fail+0 " both reject, " problem+0 " unexpected accepts"
+    print "C vs Python invalid URIs: " both_fail+0 " both reject, " problem+0 " unexpected accepts"
+}'
+
+join "$TMPDIR/go_invalid.txt" "$TMPDIR/py_invalid.txt" 2>/dev/null | awk '
+{
+    if ($2 == "FAIL" && $3 == "FAIL") both_fail++
+    else {
+        problem++
+        print "  PROBLEM id=" $1 "  go=" $2 "  python=" $3 "  (expected both FAIL)"
+    }
+}
+END {
+    print ""
+    print "Go vs Python invalid URIs: " both_fail+0 " both reject, " problem+0 " unexpected accepts"
 }'
 
 echo ""
-echo "=== Equivalence Comparison ==="
+echo "=== Equivalence Comparison (C vs Python) ==="
 
 # Extract "group_id PASS|FAIL" from each parser
 echo "$C_EQUIV"  | grep '^EQUIV' | sed -E 's/^EQUIV (PASS|FAIL)  group=([0-9]+).*/\2 \1/' | sort -k1,1 > "$TMPDIR/c_equiv.txt"
 echo "$PY_EQUIV" | grep '^EQUIV' | sed -E 's/^EQUIV (PASS|FAIL)  group=([0-9]+).*/\2 \1/' | sort -k1,1 > "$TMPDIR/py_equiv.txt"
+echo "$GO_EQUIV" | grep '^EQUIV' | sed -E 's/^EQUIV (PASS|FAIL)  group=([0-9]+).*/\2 \1/' | sort -k1,1 > "$TMPDIR/go_equiv.txt"
 
 join "$TMPDIR/c_equiv.txt" "$TMPDIR/py_equiv.txt" 2>/dev/null | awk '
 {
@@ -212,6 +256,36 @@ END {
     print ""
     print "Both PASS:        " both_pass+0 " groups  (test data confirmed by both canonical parsers)"
     print "Python-only PASS: " py_only+0 " groups  (Python covers scheme/protocol; uriparser only does syntax)"
+    print "Both FAIL:        " both_fail+0 " groups  (limitations — investigate test data)"
+    print "Disagree:         " disagree+0 " groups  (investigate — one parser says test data is wrong)"
+
+    if (both_fail > 0) {
+        printf "\n  Both-FAIL groups: "
+        for (i = 1; i <= both_fail; i++) printf "%s ", bf[i]
+        print ""
+    }
+    if (disagree > 0) {
+        print "\n  *** Groups where parsers disagree need investigation ***"
+    }
+}'
+
+echo ""
+echo "=== Equivalence Comparison (Go vs Python) ==="
+
+join "$TMPDIR/go_equiv.txt" "$TMPDIR/py_equiv.txt" 2>/dev/null | awk '
+{
+    if ($2 == "PASS" && $3 == "PASS") { both_pass++; bp[both_pass] = $1 }
+    else if ($2 == "FAIL" && $3 == "PASS") { py_only++; po[py_only] = $1 }
+    else if ($2 == "FAIL" && $3 == "FAIL") { both_fail++; bf[both_fail] = $1 }
+    else if ($2 == "PASS" && $3 == "FAIL") {
+        disagree++
+        print "  DISAGREE group=" $1 "  go=PASS  python=FAIL"
+    }
+}
+END {
+    print ""
+    print "Both PASS:        " both_pass+0 " groups  (test data confirmed by both Go and Python)"
+    print "Python-only PASS: " py_only+0 " groups  (Python covers IDN/NFC; Go skips these)"
     print "Both FAIL:        " both_fail+0 " groups  (limitations — investigate test data)"
     print "Disagree:         " disagree+0 " groups  (investigate — one parser says test data is wrong)"
 

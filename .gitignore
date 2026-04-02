@@ -7,8 +7,10 @@ inflight_trace_dump/
 pprof_dump/
 executiontrace_dump/
 
-# uriparser test binary
+# Test binaries
 uriparser_test
+go_uri_validator
 
 # Python
 __pycache__/
+.snapshots/

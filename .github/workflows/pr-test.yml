@@ -37,7 +37,7 @@ jobs:
           cockroach version
 
       - name: Create test database
-        run: cockroach sql --insecure --host=127.0.0.1:26257 -e "CREATE DATABASE uri_test;"
+        run: cockroach sql --insecure --host=127.0.0.1:26257 -e "CREATE DATABASE IF NOT EXISTS uri_test;"
 
       - name: Load uri_test_data.sql
         run: cockroach sql --insecure --host=127.0.0.1:26257 --database=uri_test < uri_test_data.sql

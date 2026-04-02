@@ -5,8 +5,9 @@
 #                      and uri_test_data.
 #
 # Usage:
-#   ./test_parse_uri.sh          # run all validation then shut down
-#   ./test_parse_uri.sh --keep   # start DB, load data, run tests, keep DB running
+#   ./test_parse_uri.sh              # run all validation then shut down
+#   ./test_parse_uri.sh --keep       # start DB, load data, run tests, keep DB running
+#   ./test_parse_uri.sh --snapshot   # also export parse_uri() output for diff comparison
 #
 set -euo pipefail
 
@@ -38,7 +39,14 @@ PID_FILE=$(mktemp "${TMPDIR:-/tmp}/crdb-parse-uri.pid.XXXXXX")
 TEST_DB="uri_parse_test_$(date +%s)_$$"
 CRDB_PID=""
 KEEP_RUNNING=false
-[ "${1:-}" = "--keep" ] && KEEP_RUNNING=true
+SNAPSHOT_MODE=false
+SNAPSHOT_DIR="$SCRIPT_DIR/.snapshots"
+for arg in "$@"; do
+  case "$arg" in
+    --keep) KEEP_RUNNING=true ;;
+    --snapshot) SNAPSHOT_MODE=true ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 # Cleanup
@@ -126,6 +134,42 @@ echo ""
 echo "Loading parse_uri.sql (UDF + helpers)..."
 test_sql <"$SCRIPT_DIR/parse_uri.sql"
 echo "  Functions created."
+
+# ---------------------------------------------------------------------------
+# Snapshot mode: export parse_uri() output for all test URIs
+# ---------------------------------------------------------------------------
+if [ "$SNAPSHOT_MODE" = true ]; then
+  mkdir -p "$SNAPSHOT_DIR"
+  SNAP_FILE="$SNAPSHOT_DIR/snapshot_$(date +%Y%m%d_%H%M%S).tsv"
+  echo ""
+  echo "Exporting parse_uri() output snapshot..."
+  {
+    echo "# source	id	uri	result"
+    test_sql -e "
+      SELECT 'test_data' AS source, id::TEXT, uri, (parse_uri(uri))::TEXT AS result
+      FROM uri_test_data ORDER BY id;" | tail -n +2
+    test_sql -e "
+      SELECT 'equiv' AS source, (group_id::TEXT || '.' || variant_id::TEXT) AS id, uri, (parse_uri(uri))::TEXT AS result
+      FROM uri_equivalence_tests ORDER BY group_id, variant_id;" | tail -n +2
+  } > "$SNAP_FILE"
+  LINE_COUNT=$(wc -l < "$SNAP_FILE" | tr -d ' ')
+  echo "  Saved $LINE_COUNT lines to $SNAP_FILE"
+
+  # Compare with previous snapshot if one exists
+  PREV_SNAP=$(ls -t "$SNAPSHOT_DIR"/snapshot_*.tsv 2>/dev/null | sed -n '2p' || true)
+  if [ -n "$PREV_SNAP" ]; then
+    echo ""
+    echo "Comparing with previous snapshot: $(basename "$PREV_SNAP")"
+    DIFF_COUNT=$(diff <(cut -f1,2,4 "$PREV_SNAP") <(cut -f1,2,4 "$SNAP_FILE") | grep -c '^[<>]' || true)
+    if [ "$DIFF_COUNT" = "0" ]; then
+      echo "  No output differences."
+    else
+      echo "  $DIFF_COUNT lines differ. Showing first 20:"
+      diff <(cut -f1,2,4 "$PREV_SNAP") <(cut -f1,2,4 "$SNAP_FILE") | grep '^[<>]' | head -20 || true
+    fi
+  fi
+  echo ""
+fi
 
 # ---------------------------------------------------------------------------
 # Validation checks
@@ -400,10 +444,17 @@ BENCH_MS2=$(echo "$BENCH_RESULT2" | cut -f2)
 PER_CALL2=$(echo "$BENCH_CALLS2 $BENCH_MS2" | awk '{if($1>0) printf "%.1f", $2/$1*1000; else print "N/A"}')
 echo "    ${BENCH_CALLS2} calls in ${BENCH_MS2}ms (${PER_CALL2} µs/call)"
 
-# Per-URI-type latency
+# Per-URI-type latency (with now() baseline)
 BENCH_SINGLE=1000
 echo ""
 echo "  Per-URI-type latency ($BENCH_SINGLE iterations each):"
+
+# now() baseline — floor reference for what "free" looks like
+NOW_US=$(test_sql -e "
+  SELECT round(extract(epoch FROM (clock_timestamp() - statement_timestamp())) * 1000000 / $BENCH_SINGLE)::INT
+  FROM generate_series(1, $BENCH_SINGLE) WHERE now() IS NOT NULL HAVING count(*) > 0;" | tail -1)
+printf "    %-16s %6s µs/call  (baseline)\n" "now()" "$NOW_US"
+
 for BENCH_PAIR in \
   "simple_http|http://example.com/path?q=1#frag" \
   "complex_auth|http://user:pass@example.com:8080/a/b/c?x=1&y=2#s" \
