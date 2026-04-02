@@ -13,3 +13,4 @@ go_uri_validator
 
 # Python
 __pycache__/
+.snapshots/

@@ -11,36 +11,23 @@ RFC 3986 URI parser and normalizer for CockroachDB, with comprehensive test data
 cockroach sql --insecure --host=<host>:<port> --database=<db> < parse_uri.sql
 ```
 
-This creates two functions:
+This creates a single function:
 
-| Function | Speed | What it does |
-|---|---|---|
-| `parse_uri_fast(TEXT)` | **<2ms/call** | Pure SQL (no PL/pgSQL). Parses URIs, lowercases scheme/host, removes default ports, normalizes empty paths. Best for ad-hoc queries |
-| `parse_uri(TEXT)` | ~5ms/call | Full RFC 3986 normalization: everything above plus percent-encoding decode/uppercase, dot-segment removal, IPv6 RFC 5952 compression, file-scheme handling |
+**`parse_uri(TEXT)`** — Pure SQL, sub-millisecond per call. Full RFC 3986 normalization including percent-encoding decode/uppercase, dot-segment removal, IPv6 RFC 5952 compression (via INET built-in), default port removal, file-scheme handling.
 
-Both return JSONB with keys: `scheme`, `userinfo`, `host`, `port`, `path`, `query`, `fragment`, `authority`, `normalized_uri`.
-
-**Why two functions?** CockroachDB recompiles all PL/pgSQL functions referenced by a statement on every execution (~2s overhead for this function chain). `parse_uri_fast()` avoids PL/pgSQL entirely, giving sub-millisecond response for ad-hoc queries. Use `parse_uri()` when you need full normalization or are processing URIs in bulk within a single statement where the compilation cost is amortized.
+Returns JSONB with keys: `scheme`, `userinfo`, `host`, `port`, `path`, `query`, `fragment`, `authority`, `normalized_uri`.
 
 ## Usage
 
-### Ad-hoc queries (sub-millisecond)
-
 ```sql
-SELECT parse_uri_fast('http://example.com/path?q=1#frag');
--- {"scheme": "http", "host": "example.com", "path": "/path", "query": "q=1", ...}
-
-SELECT (parse_uri_fast(uri))->>'host' FROM uri_test_data WHERE id = 1;
-```
-
-### Full normalization
-
-```sql
--- ~2s first-call overhead per statement, ~5ms/call in bulk
+-- Sub-millisecond per call, full RFC 3986 normalization
 SELECT parse_uri('http://EXAMPLE.COM/%7Euser/a/../b?q=%31');
 -- {"normalized_uri": "http://example.com/~user/b?q=1", ...}
 
--- Bulk processing amortizes the compilation cost
+-- Extract individual components
+SELECT (parse_uri(uri))->>'host' FROM uri_test_data WHERE id = 1;
+
+-- Bulk processing
 SELECT id, uri, (parse_uri(uri))->>'normalized_uri'
 FROM uri_test_data
 WHERE id IN (1, 7, 14, 110, 300, 1303);
@@ -230,7 +217,7 @@ CREATE TABLE uri_equivalence_tests (
 
 | File | Description |
 |---|---|
-| `parse_uri.sql` | All UDF definitions (`parse_uri`, `parse_uri_fast`, and internal helpers) |
+| `parse_uri.sql` | All UDF definitions (`parse_uri` and pure SQL helpers `_uri_pct_norm`, `_uri_dot_norm`) |
 | `test_parse_uri.sh` | Full UDF validation + benchmarks (40 checks, sections A–J) |
 | `test_setup.sh` | Simpler data-only validation harness (13 checks, no UDF) |
 | `uriparser_test.c` | C wrapper around [uriparser](https://uriparser.github.io/) for validity and equivalence checks |
