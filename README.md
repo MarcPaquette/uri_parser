@@ -17,6 +17,36 @@ This creates a single function:
 
 Returns JSONB with keys: `scheme`, `userinfo`, `host`, `port`, `path`, `query`, `fragment`, `authority`, `normalized_uri`.
 
+### Example
+
+**Input:**
+```sql
+SELECT parse_uri('HTTP://User@EXAMPLE.COM:80/%7Euser/a/../b?q=%31#frag');
+```
+
+**Output:**
+```json
+{
+  "host": "example.com",
+  "path": "/~user/b",
+  "port": null,
+  "query": "1",
+  "scheme": "http",
+  "fragment": "frag",
+  "userinfo": "User",
+  "authority": "User@example.com",
+  "normalized_uri": "http://User@example.com/~user/b?q=1#frag"
+}
+```
+
+What changed:
+- `HTTP` → `http` — scheme lowercased
+- `EXAMPLE.COM` → `example.com` — host lowercased
+- `:80` removed — default port for HTTP
+- `%7E` → `~` — unreserved character decoded
+- `a/../b` → `b` — dot segments resolved
+- `%31` → `1` — unreserved character decoded
+
 ## Usage
 
 ```sql
